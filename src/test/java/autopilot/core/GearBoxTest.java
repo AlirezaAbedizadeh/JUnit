@@ -1,150 +1,241 @@
 package autopilot.core;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.ValueSource;
-
 import autopilot.exception.IllegalGearChangeException;
 import autopilot.exception.SensorFailureException;
 import autopilot.sensor.SpeedSensor;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import java.util.Arrays;
+import java.util.stream.Stream;
+
+import static autopilot.core.GearBox.Gear.D;
+import static autopilot.core.GearBox.Gear.N;
+import static autopilot.core.GearBox.Gear.P;
+import static autopilot.core.GearBox.Gear.R;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 class GearBoxTest {
+    private static final double STOPPED_SPEED_KMH = 0.0;
+    private static final double REVERSE_ENTRY_LIMIT_KMH = 5.0;
+    private static final String SENSOR_FAILURE_MESSAGE = "Speed reading unavailable";
+    private static final double MESSAGE_TEST_SPEED_KMH = 12.5;
+    private static final String FORBIDDEN_TRANSITION_MESSAGE = "Cannot change from P to D at 12.5 km/h";
 
-    private GearBox gearBox;
-    private double currentSpeed;
+    private static final boolean[][] AT_REST = {
+            {true,  true,  false, false},
+            {false, true,  true,  true},
+            {false, false, true,  true},
+            {false, true,  false, true}
+    };
+    private static final boolean[][] MOVING_BELOW_REVERSE_LIMIT = {
+            {true,  true,  false, false},
+            {false, true,  true,  false},
+            {false, false, true,  true},
+            {false, false, false, true}
+    };
+    private static final boolean[][] AT_REVERSE_LIMIT = {
+            {true,  false, false, false},
+            {false, true,  true,  false},
+            {false, false, true,  true},
+            {false, false, false, true}
+    };
 
-    @BeforeEach
-    void setUp() {
-        SpeedSensor speedSensor = () -> currentSpeed;
-        gearBox = new GearBox(speedSensor);
+    @ParameterizedTest(name = "{0} -> {1} at {2} km/h")
+    @MethodSource("allowedTransitions")
+    void changeTo_allowedTransition_selectsRequestedGear(GearBox.Gear from,
+                                                        GearBox.Gear to, double speedKmh) {
+        StubSpeedSensor sensor = new StubSpeedSensor();
+        GearBox gearBox = inGear(from, sensor);
+        sensor.speedKmh = speedKmh;
+
+        gearBox.changeTo(to);
+
+        assertEquals(to, gearBox.getCurrentGear());
     }
 
-    @Test
-    void testNegativeSpeedThrowsException() {
-        currentSpeed = -1.0;
-        assertThrows(IllegalArgumentException.class, () -> gearBox.changeTo(GearBox.Gear.R));
+    @ParameterizedTest(name = "reject {0} -> {1} at {2} km/h")
+    @MethodSource("forbiddenTransitions")
+    void changeTo_forbiddenTransition_throwsIllegalGearChange(GearBox.Gear from,
+                                                            GearBox.Gear to, double speedKmh) {
+        StubSpeedSensor sensor = new StubSpeedSensor();
+        GearBox gearBox = inGear(from, sensor);
+        sensor.speedKmh = speedKmh;
+
+        assertThrows(IllegalGearChangeException.class, () -> gearBox.changeTo(to));
+
+        assertEquals(from, gearBox.getCurrentGear());
     }
 
-    @Test
-    void testNullTargetGearThrowsException() {
-        assertThrows(NullPointerException.class, () -> gearBox.changeTo(null));
+    static Stream<Arguments> allowedTransitions() {
+        return Stream.concat(transitions(true), Stream.of(
+                arguments(P, R, -0.0), arguments(R, D, -0.0), arguments(D, R, -0.0),
+                arguments(R, N, Double.MAX_VALUE), arguments(N, D, Double.MAX_VALUE)));
     }
 
-    @Test
-    void testChangeFromReverseToParkThrowsException() {
-        currentSpeed = 0.0;
-        gearBox.changeTo(GearBox.Gear.R);
-        assertThrows(IllegalGearChangeException.class, () -> gearBox.changeTo(GearBox.Gear.P));
+    static Stream<Arguments> forbiddenTransitions() {
+        return transitions(false);
     }
 
-    @ParameterizedTest
-    @ValueSource(doubles = {0.0, 1.0, 3.0, 4.0})
-    void testValidChangeFromParkToReverse(double speed) {
-        currentSpeed = speed;
-        assertDoesNotThrow(() -> gearBox.changeTo(GearBox.Gear.R));
-        assertEquals(GearBox.Gear.R, gearBox.getCurrentGear());
+    private static Stream<Arguments> transitions(boolean allowed) {
+        return Stream.of(
+                new TransitionPartition(STOPPED_SPEED_KMH, AT_REST),
+                new TransitionPartition(Math.nextDown(REVERSE_ENTRY_LIMIT_KMH), MOVING_BELOW_REVERSE_LIMIT),
+                new TransitionPartition(REVERSE_ENTRY_LIMIT_KMH, AT_REVERSE_LIMIT)
+        ).flatMap(partition -> Arrays.stream(GearBox.Gear.values()).flatMap(from ->
+                Arrays.stream(GearBox.Gear.values())
+                        .filter(to -> partition.allowed()[from.ordinal()][to.ordinal()] == allowed)
+                        .map(to -> arguments(from, to, partition.speedKmh()))));
     }
 
-    @ParameterizedTest
-    @ValueSource(doubles = {5.0, 6.0, 7.0, 8.0})
-    void testInvalidChangeFromParkToReverse(double speed) {
-        currentSpeed = speed;
-        assertThrows(IllegalGearChangeException.class, () -> gearBox.changeTo(GearBox.Gear.R));
+    @ParameterizedTest(name = "P -> R at boundary speed {0}")
+    @MethodSource("extraReverseEntrySpeeds")
+    void changeTo_reverseEntryOutsideLimit_throwsIllegalGearChange(double speedKmh) {
+        GearBox gearBox = new GearBox(() -> speedKmh);
+
+        assertThrows(IllegalGearChangeException.class, () -> gearBox.changeTo(R));
+
+        assertEquals(P, gearBox.getCurrentGear());
     }
 
-    @ParameterizedTest
-    @CsvSource({
-        "0.0, true",
-        "1.0, false",
-        "2.0, false"
-    })
-    void testChangeBetweenReverseAndDrive(double speed, boolean isAllowed) {
-        currentSpeed = 0.0;
-        gearBox.changeTo(GearBox.Gear.R);
-        
-        currentSpeed = speed;
-        if (isAllowed) {
-            assertDoesNotThrow(() -> gearBox.changeTo(GearBox.Gear.D));
-            assertDoesNotThrow(() -> gearBox.changeTo(GearBox.Gear.R));
-        } else {
-            assertThrows(IllegalGearChangeException.class, () -> gearBox.changeTo(GearBox.Gear.D));
-        }
+    static Stream<Double> extraReverseEntrySpeeds() {
+        return Stream.of(Math.nextUp(REVERSE_ENTRY_LIMIT_KMH), Double.MAX_VALUE);
     }
 
-    @ParameterizedTest
-    @ValueSource(doubles = {0.0, 1.0, 2.0, 3.0, 4.0, 5.0})
-    void testValidChangeFromReverseToNeutral(double speed) {
-        currentSpeed = 0.0;
-        gearBox.changeTo(GearBox.Gear.R);
-        
-        currentSpeed = speed;
-        assertDoesNotThrow(() -> gearBox.changeTo(GearBox.Gear.N));
+    @ParameterizedTest(name = "{0} -> {1} at smallest positive speed")
+    @MethodSource("directionChanges")
+    void changeTo_nonzeroDirectionChange_throwsIllegalGearChange(GearBox.Gear from,
+                                                               GearBox.Gear to) {
+        StubSpeedSensor sensor = new StubSpeedSensor();
+        GearBox gearBox = inGear(from, sensor);
+        sensor.speedKmh = Double.MIN_VALUE;
+
+        assertThrows(IllegalGearChangeException.class, () -> gearBox.changeTo(to));
+
+        assertEquals(from, gearBox.getCurrentGear());
     }
 
-    @ParameterizedTest
-    @ValueSource(doubles = {0.0, 1.0, 2.0, 3.0, 4.0, 5.0})
-    void testValidChangeFromNeutralToDrive(double speed) {
-        currentSpeed = 0.0;
-        gearBox.changeTo(GearBox.Gear.R);
-        gearBox.changeTo(GearBox.Gear.N);
-        
-        currentSpeed = speed;
-        assertDoesNotThrow(() -> gearBox.changeTo(GearBox.Gear.D));
+    static Stream<Arguments> directionChanges() {
+        return Stream.of(arguments(R, D), arguments(D, R));
     }
 
-    @Test
-    void testInvalidChangesNeutralToParkAndDriveToNeutral() {
-        currentSpeed = 0.0;
-        gearBox.changeTo(GearBox.Gear.R);
-        gearBox.changeTo(GearBox.Gear.N);
-        
-        assertThrows(IllegalGearChangeException.class, () -> gearBox.changeTo(GearBox.Gear.P));
-        
-        gearBox.changeTo(GearBox.Gear.D);
-        
-        assertThrows(IllegalGearChangeException.class, () -> gearBox.changeTo(GearBox.Gear.N));
-    }
-
-
-    @Test
-    void testSensorFailurePropagates() {
-        SensorFailureException expectedFailure = new SensorFailureException("Speed reading unavailable");
-        gearBox = new GearBox(() -> {
-            throw expectedFailure;
-        });
-
-        SensorFailureException actualFailure = assertThrows(SensorFailureException.class, () -> gearBox.changeTo(GearBox.Gear.R));
-        assertEquals(expectedFailure, actualFailure);
-    }
-
-    @Test
-    void testChangeToSameGearDoesNotReadSensor() {
-        gearBox = new GearBox(() -> {
+    @ParameterizedTest(name = "same gear {0} does not need a speed reading")
+    @MethodSource("allGears")
+    void changeTo_sameGear_doesNotReadSpeedSensor(GearBox.Gear gear) {
+        GearBox gearBox = inGear(gear, new StubSpeedSensor());
+        gearBox.setSpeedSensor(() -> {
             throw new AssertionError("An unchanged gear must not read the speed sensor");
         });
 
-        assertDoesNotThrow(() -> gearBox.changeTo(GearBox.Gear.P));
-        assertEquals(GearBox.Gear.P, gearBox.getCurrentGear());
+        gearBox.changeTo(gear);
+
+        assertEquals(gear, gearBox.getCurrentGear());
+    }
+
+    static Stream<GearBox.Gear> allGears() {
+        return Arrays.stream(GearBox.Gear.values());
+    }
+
+    @ParameterizedTest(name = "invalid speed {2} for {0} -> {1}")
+    @MethodSource("invalidSpeedChanges")
+    void changeTo_invalidSpeed_throwsIllegalArgument(GearBox.Gear from,
+                                                   GearBox.Gear to, double invalidSpeed) {
+        StubSpeedSensor sensor = new StubSpeedSensor();
+        GearBox gearBox = inGear(from, sensor);
+        sensor.speedKmh = invalidSpeed;
+
+        assertThrows(IllegalArgumentException.class, () -> gearBox.changeTo(to));
+
+        assertEquals(from, gearBox.getCurrentGear());
+    }
+
+    static Stream<Arguments> invalidSpeedChanges() {
+        return Stream.of(new GearBox.Gear[]{P, R}, new GearBox.Gear[]{R, N},
+                        new GearBox.Gear[]{N, D}, new GearBox.Gear[]{D, R})
+                .flatMap(pair -> TestInputs.invalidNonNegativeNumbers()
+                        .mapToObj(speed -> arguments(pair[0], pair[1], speed)));
+    }
+
+    @ParameterizedTest(name = "null target while in {0}")
+    @MethodSource("allGears")
+    void changeTo_nullTarget_throwsBeforeReadingSensorAndPreservesGear(GearBox.Gear from) {
+        GearBox gearBox = inGear(from, new StubSpeedSensor());
+        gearBox.setSpeedSensor(() -> {
+            throw new AssertionError("A null target must be rejected before reading speed");
+        });
+
+        assertThrows(NullPointerException.class, () -> gearBox.changeTo(null));
+
+        assertEquals(from, gearBox.getCurrentGear());
+    }
+
+    @ParameterizedTest(name = "sensor failure during {0} -> {1}")
+    @MethodSource("sensorFailureTransitions")
+    void changeTo_failedSpeedSensor_preservesGearAndPropagatesOriginalFailure(GearBox.Gear from,
+                                                                           GearBox.Gear to) {
+        SensorFailureException failure = new SensorFailureException(SENSOR_FAILURE_MESSAGE);
+        GearBox gearBox = inGear(from, new StubSpeedSensor());
+        gearBox.setSpeedSensor(() -> {
+            throw failure;
+        });
+
+        assertSame(failure, assertThrows(SensorFailureException.class, () -> gearBox.changeTo(to)));
+
+        assertEquals(from, gearBox.getCurrentGear());
+    }
+
+    static Stream<Arguments> sensorFailureTransitions() {
+        return Stream.of(arguments(P, R), arguments(R, N), arguments(N, D), arguments(D, R));
     }
 
     @Test
-    void testRejectedTransitionPreservesCurrentGear() {
-        currentSpeed = 6.0;
-        assertThrows(IllegalGearChangeException.class, () -> gearBox.changeTo(GearBox.Gear.R));
-        
-        assertEquals(GearBox.Gear.P, gearBox.getCurrentGear());
+    void changeTo_forbiddenTransition_reportsContextInException() {
+        GearBox gearBox = new GearBox(() -> MESSAGE_TEST_SPEED_KMH);
+
+        IllegalGearChangeException failure = assertThrows(IllegalGearChangeException.class,
+                () -> gearBox.changeTo(D));
+
+        assertEquals(FORBIDDEN_TRANSITION_MESSAGE, failure.getMessage());
     }
 
     @Test
-    void testInvalidSpeedDoesNotChangeGearBeforeRecovery() {
-        currentSpeed = -1.0; 
-        assertThrows(IllegalArgumentException.class, () -> gearBox.changeTo(GearBox.Gear.R));
-        
-        assertEquals(GearBox.Gear.P, gearBox.getCurrentGear());
+    void changeTo_invalidSpeed_doesNotChangeGearBeforeRecovery() {
+        StubSpeedSensor sensor = new StubSpeedSensor();
+        GearBox gearBox = inGear(R, sensor);
+        sensor.speedKmh = Double.NaN;
+        assertThrows(IllegalArgumentException.class, () -> gearBox.changeTo(D));
+        sensor.speedKmh = STOPPED_SPEED_KMH;
+
+        gearBox.changeTo(D);
+
+        assertEquals(D, gearBox.getCurrentGear());
+    }
+
+    private static GearBox inGear(GearBox.Gear gear, StubSpeedSensor sensor) {
+        GearBox gearBox = new GearBox(sensor);
+        if (gear != P) {
+            gearBox.changeTo(R);
+            if (gear == N || gear == D) {
+                gearBox.changeTo(gear);
+            }
+        }
+        return gearBox;
+    }
+
+    private record TransitionPartition(double speedKmh, boolean[][] allowed) {
+    }
+
+    private static final class StubSpeedSensor implements SpeedSensor {
+        private double speedKmh = STOPPED_SPEED_KMH;
+
+        @Override
+        public double getSpeedKmh() {
+            return speedKmh;
+        }
     }
 }
