@@ -7,7 +7,6 @@ import autopilot.sensor.SpeedSensor;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.stream.Stream;
@@ -19,6 +18,9 @@ class AutoDriverTest {
     private static final double CRUISING_SPEED_KMH = 80.0;
     private static final double CLEAR_DISTANCE_METERS = 100.0;
     private static final double CENTERED_LANE_OFFSET_METERS = 0.0;
+    private static final double CENTERED_STEERING_ANGLE_DEGREES = 0.0;
+    private static final double LANE_DEVIATION_METERS = 1.0;
+    private static final double STEERING_CORRECTION_DEGREES = 45.0;
     private static final double RELEASED_BRAKE_PRESSURE = 0.0;
     private static final double SAFE_MODE_BRAKE_PRESSURE = 30.0;
     private static final String SENSOR_FAILURE_MESSAGE = "Sensor reading unavailable";
@@ -31,11 +33,11 @@ class AutoDriverTest {
 
         AutoDriver.DriveResult actual = driver.tick(DRIVING_GEAR);
 
-        assertEquals(normalResult(0.0), actual);
+        assertEquals(normalResult(CENTERED_STEERING_ANGLE_DEGREES), actual);
     }
 
     @ParameterizedTest(name = "lane offset {0} m gives steering {1} degrees")
-    @CsvSource({"1.0, -45.0", "-1.0, 45.0"})
+    @MethodSource("laneDeviationCases")
     void tick_laneDeviation_steersInOppositeDirection(double laneOffset, double expectedSteering) {
         LaneSensor laneSensor = () -> laneOffset;
         AutoDriver driver = new AutoDriver(nominalSpeedSensor(), nominalObstacleSensor(),
@@ -44,6 +46,13 @@ class AutoDriverTest {
         AutoDriver.DriveResult actual = driver.tick(DRIVING_GEAR);
 
         assertEquals(normalResult(expectedSteering), actual);
+    }
+
+    static Stream<Arguments> laneDeviationCases() {
+        return Stream.of(
+                arguments(LANE_DEVIATION_METERS, -STEERING_CORRECTION_DEGREES),
+                arguments(-LANE_DEVIATION_METERS, STEERING_CORRECTION_DEGREES)
+        );
     }
 
     @ParameterizedTest(name = "failed {0} sensor enters safe mode")
@@ -56,7 +65,7 @@ class AutoDriverTest {
 
         AutoDriver.DriveResult actual = driver.tick(DRIVING_GEAR);
 
-        assertEquals(new AutoDriver.DriveResult(0.0, SAFE_MODE_BRAKE_PRESSURE,
+        assertEquals(new AutoDriver.DriveResult(CENTERED_STEERING_ANGLE_DEGREES, SAFE_MODE_BRAKE_PRESSURE,
                 AdaptiveCruise.Mode.BRAKE, false, true), actual, failedSensor);
     }
 
