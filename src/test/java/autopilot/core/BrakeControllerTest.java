@@ -134,4 +134,37 @@ class BrakeControllerTest {
         assertEquals(100.0, brakeController.getPressure(), TOLERANCE);
         assertTrue(brakeController.isWarningActive());
     }
+
+
+    @Test
+    void testNonFiniteInputsThrowException() {
+        assertThrows(IllegalArgumentException.class, () -> brakeController.apply(Double.NaN, 50.0, GearBox.Gear.D));
+        assertThrows(IllegalArgumentException.class, () -> brakeController.apply(50.0, Double.NaN, GearBox.Gear.D));
+        assertThrows(IllegalArgumentException.class, () -> brakeController.apply(Double.POSITIVE_INFINITY, 50.0, GearBox.Gear.D));
+        assertThrows(IllegalArgumentException.class, () -> brakeController.apply(50.0, Double.POSITIVE_INFINITY, GearBox.Gear.D));
+    }
+
+    @Test
+    void testZeroAndExtremeFiniteValues() {
+        assertEquals(0.0, brakeController.apply(0.0, 0.0, GearBox.Gear.D), TOLERANCE);
+        assertEquals(Double.MIN_VALUE, brakeController.apply(Double.MIN_VALUE, 0.0, GearBox.Gear.D), TOLERANCE);        
+        assertEquals(100.0, brakeController.apply(Double.MAX_VALUE, 0.0, GearBox.Gear.D), TOLERANCE);
+    }
+
+    @Test
+    void testWarningRemainsActiveAfterEmergencyBrake() {
+        brakeController.emergencyBrake(GearBox.Gear.D);
+        assertTrue(brakeController.isWarningActive());
+        
+        brakeController.apply(50.0, 50.0, GearBox.Gear.D);
+        assertTrue(brakeController.isWarningActive());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = GearBox.Gear.class, mode = EnumSource.Mode.EXCLUDE, names = "P")
+    void testEmergencyBrakeInAllValidGears(GearBox.Gear gear) {
+        assertDoesNotThrow(() -> brakeController.emergencyBrake(gear));
+        assertEquals(100.0, brakeController.getPressure(), TOLERANCE);
+        assertTrue(brakeController.isWarningActive());
+    }
 }
