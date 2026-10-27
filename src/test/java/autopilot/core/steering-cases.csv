@@ -1,0 +1,38 @@
+scenario,requestedAngleDegrees,speedKmh,ticks,expectedTargetDegrees,expectedAngleDegrees
+centered,0.0,80.0,1,0.0,0.0
+negative zero,-0.0,-0.0,1,-0.0,-0.0
+smallest positive angle,4.9E-324,0.0,1,4.9E-324,4.9E-324
+smallest negative angle,-4.9E-324,0.0,1,-4.9E-324,-4.9E-324
+small positive angle,30.0,80.0,1,30.0,30.0
+small negative angle,-30.0,80.0,1,-30.0,-30.0
+fractional positive angle,30.5,80.0,1,30.5,30.5
+fractional negative angle,-30.5,80.0,1,-30.5,-30.5
+exact positive tick limit,60.0,80.0,1,60.0,60.0
+exact negative tick limit,-60.0,80.0,1,-60.0,-60.0
+positive request above tick limit,61.0,80.0,1,61.0,60.0
+negative request above tick limit,-61.0,80.0,1,-61.0,-60.0
+reaches positive target on second tick,61.0,80.0,2,61.0,61.0
+reaches negative target on second tick,-61.0,80.0,2,-61.0,-61.0
+reaches fractional positive target,60.5,80.0,2,60.5,60.5
+reaches fractional negative target,-60.5,80.0,2,-60.5,-60.5
+just inside positive physical limit,449.0,80.0,8,449.0,449.0
+just inside negative physical limit,-449.0,80.0,8,-449.0,-449.0
+exact positive physical limit,450.0,80.0,8,450.0,450.0
+exact negative physical limit,-450.0,80.0,8,-450.0,-450.0
+clamps above positive physical limit,451.0,80.0,8,450.0,450.0
+clamps below negative physical limit,-451.0,80.0,8,-450.0,-450.0
+huge positive request,1.7976931348623157E308,0.0,8,450.0,450.0
+huge negative request,-1.7976931348623157E308,0.0,8,-450.0,-450.0
+seven ticks do not jump to target,450.0,80.0,7,450.0,420.0
+completed target is stable,450.0,80.0,9,450.0,450.0
+speed exactly 120 keeps physical range,450.0,120.0,8,450.0,450.0
+speed just above 120 restricts range,450.0,120.001,2,90.0,90.0
+high speed positive first tick,450.0,121.0,1,90.0,60.0
+high speed negative first tick,-450.0,121.0,1,-90.0,-60.0
+high speed negative target,-450.0,121.0,2,-90.0,-90.0
+high speed exact positive limit,90.0,121.0,2,90.0,90.0
+high speed exact negative limit,-90.0,121.0,2,-90.0,-90.0
+high speed inside limit,89.0,121.0,2,89.0,89.0
+high speed clamps just outside limit,91.0,121.0,2,90.0,90.0
+high speed small request unchanged,30.0,121.0,1,30.0,30.0
+largest finite speed restricts target,450.0,1.7976931348623157E308,2,90.0,90.0
